@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.8.3)
 project(balm)
 
 set(CMAKE_BUILD_TYPE "Release")
-set(CMAKE_CXX_FLAGS "-std=c++11")
+set(CMAKE_CXX_FLAGS "-std=c++14")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
 
 
@@ -12,7 +12,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   pcl_conversions
   pcl_ros
-  livox_ros_driver
+#  livox_ros_driver
 )
 
 find_package(PCL REQUIRED)
@@ -28,15 +28,14 @@ include_directories(
   ${PCL_INCLUDE_DIRS}
 	${CERES_INCLUDE_DIRS}
 )
-
 catkin_package(
   CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs
   DEPENDS EIGEN3 PCL OpenCV
   INCLUDE_DIRS
 )
 
-add_executable(livox_feature src/features/livox_feature.cpp)
-target_link_libraries(livox_feature ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+#add_executable(livox_feature src/features/livox_feature.cpp)
+#target_link_libraries(livox_feature ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
 add_executable(velodyne_feature src/features/velodyne_feature.cpp)
 target_link_libraries(velodyne_feature ${catkin_LIBRARIES} ${PCL_LIBRARIES})
