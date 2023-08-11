@@ -160,6 +160,7 @@ void mid_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
 
 void horizon_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
 {
+  std::cout << " ########### received pointclouds = "<< msg->point_num << "  ###########"<<std::endl;
   vector<pcl::PointCloud<PointType>> pl_buff(N_SCANS);
   vector<vector<orgtype>> typess(N_SCANS);
   pcl::PointCloud<PointType> pl_full, pl_corn, pl_surf;

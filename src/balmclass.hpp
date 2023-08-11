@@ -33,6 +33,8 @@ public:
 // Hash value
 namespace std
 {
+  // 1、hash 函数：override operator()的一个类，分别计算出内置类型的 Hash Value 然后对它们进行 Combine 得到一个哈希值，一般直接采用移位加异或（XOR）便可得到还不错的哈希值（碰撞不会太频繁）
+  // 2、直接实例化模板，需要KEY重载operator==  
   template<>
   struct hash<VOXEL_LOC>
   {
@@ -50,6 +52,12 @@ struct M_POINT
   int count = 0;
 };
 
+// 将点云划分为voexl，以voxel的location作为键,创建hashtable，
+// 查找hashtable，若该键对应位置未创建，则在对应位置放入该点，并记录该位置点云数量
+// 若该位置已经创建，则将新点与其中点的坐标求和，并更新该位置点云数量
+// 以hashtable的size来重新划分pl_feat的size，并以每个hashtale中点云的均值作为该voxel的坐标
+
+// 划分体素，每个体素仅用一个点来表示，这个点是该体素内点云的坐标均值
 // Similar with PCL voxelgrid filter
 void down_sampling_voxel(pcl::PointCloud<PointType> &pl_feat, double voxel_size)
 {
@@ -109,21 +117,21 @@ void down_sampling_voxel(pcl::PointCloud<PointType> &pl_feat, double voxel_size)
 
 }
 
-void down_sampling_voxel(PL_VEC &pl_feat, double voxel_size)
+void down_sampling_voxel(PL_VEC &pl_feat/*PL_VEC std::vector<Eigen::Vector3d>*/, double voxel_size)
 {
   unordered_map<VOXEL_LOC, M_POINT> feat_map;
   uint plsize = pl_feat.size();
 
-  for(uint i=0; i<plsize; i++)
+  for(uint i=0; i<plsize; i++)// 遍历 pl_feat
   {
     Eigen::Vector3d &p_c = pl_feat[i];
     double loc_xyz[3];
     for(int j=0; j<3; j++)
     {
-      loc_xyz[j] = p_c[j] / voxel_size;
+      loc_xyz[j] = p_c[j] / voxel_size;// voxel location
       if(loc_xyz[j] < 0)
       {
-        loc_xyz[j] -= 1.0;
+        loc_xyz[j] -= 1.0;// 为什么小于0要减1？？？
       }
     }
 
@@ -131,6 +139,7 @@ void down_sampling_voxel(PL_VEC &pl_feat, double voxel_size)
     auto iter = feat_map.find(position);
     if(iter != feat_map.end())
     {
+      // 当前position内有点，相加+计数
       iter->second.xyz[0] += p_c[0];
       iter->second.xyz[1] += p_c[1];
       iter->second.xyz[2] += p_c[2];
@@ -138,6 +147,7 @@ void down_sampling_voxel(PL_VEC &pl_feat, double voxel_size)
     }
     else
     {
+      // 当前position内没有点，添加+计数
       M_POINT anp;
       anp.xyz[0] = p_c[0];
       anp.xyz[1] = p_c[1];
@@ -149,11 +159,12 @@ void down_sampling_voxel(PL_VEC &pl_feat, double voxel_size)
   }
 
   plsize = feat_map.size();
-  pl_feat.resize(plsize);
+  pl_feat.resize(plsize);// 以voxel的size，确定滤波后pl_feat的size
 
   uint i = 0;
   for(auto iter=feat_map.begin(); iter!=feat_map.end(); ++iter)
   {
+    // 将每个voxel，用其中点的均值表示
     pl_feat[i][0] = iter->second.xyz[0]/iter->second.count;
     pl_feat[i][1] = iter->second.xyz[1]/iter->second.count;
     pl_feat[i][2] = iter->second.xyz[2]/iter->second.count;
@@ -236,11 +247,13 @@ double opt_feat_eigen_limit[2] = {4*4, 3*3};
 class LM_SLWD_VOXEL
 {
 public: 
-  int slwd_size, filternum, thd_num, jac_leng;
+  
+  int slwd_size, filternum, thd_num, jac_leng;// jac_leng J length
   int iter_max = 20;
 
-  double corn_less;
+  double corn_less;// add weight for line feature and more
 
+  // final pose and temp pose
   vector<SO3> so3_poses, so3_poses_temp;
   vector<Eigen::Vector3d> t_poses, t_poses_temp;
 
@@ -248,8 +261,8 @@ public:
   vector<SIG_VEC_CLASS> sig_vecs;
   vector<vector<Eigen::Vector3d>*> plvec_voxels;
   vector<vector<int>*> slwd_nums;
-  int map_refine_flag;
-  mutex my_mutex;
+  int map_refine_flag;// 0 not refined; 2 refined
+  mutex my_mutex;// 
 
   LM_SLWD_VOXEL(int ss, int fn, int thnum): slwd_size(ss), filternum(fn), thd_num(thnum)
   {
@@ -261,6 +274,8 @@ public:
   }
 
   // Used by "push_voxel"
+  // plvec_orig 传入单帧的原始点云
+  // plvec_voxel 单帧点云滤波（若小于filternum2use，全部放入plvec_voxel,若大于filternum2use，每part个点计算均值，得到计算filternum2use个点）
   void downsample(vector<Eigen::Vector3d> &plvec_orig, int cur_frame,vector<Eigen::Vector3d> &plvec_voxel, vector<int> &slwd_num, int filternum2use)
   {
     uint plsize = plvec_orig.size();
@@ -293,6 +308,9 @@ public:
   }
 
   // Push voxel into optimizer
+  // plvec_orig ： plvec_orig为叶节点中，多帧的origin点云，即这个体素位置在多个时刻的观测
+  // sig_vec ： 当前叶节点的 P_fixed（margi）
+  // lam_type ： 当前八叉树中的特征点的类别 0 is surf, 1 is corn ，参数在八叉树构造时赋值
   void push_voxel(vector<vector<Eigen::Vector3d>*> &plvec_orig, SIG_VEC_CLASS &sig_vec, int lam_type)
   {
     int process_points_size = 0;
@@ -304,14 +322,14 @@ public:
       }
     }
     
-    // Only one scan
+    // Only one scan 
     if(process_points_size <= 1)
     {
       return;
     }
 
     int filternum2use = filternum;
-    if(filternum*process_points_size < MIN_PS)
+    if(filternum*process_points_size < MIN_PS)// 当前帧数小于 MIN_PS ，计算 MIN_PS 对 process_points_size 的倍数
     {
       filternum2use = MIN_PS / process_points_size + 1;
     }
@@ -357,14 +375,14 @@ public:
     // For plane, the residual is lambda_0
     // For line, the residual is lambda_0+lambda_1
     // We only calculate lambda_1 here
-    for(int a=head; a<end; a++)
+    for(int a=head; a<end; a++)// 遍历plvec_voxels（很多个voxel(实际上是叶节点)，每个voxel单独计算特征，并计算距离误差项）
     {  
       uint k = lam_types[a]; // 0 is surf, 1 is line
       SIG_VEC_CLASS &sig_vec = sig_vecs[a];
       vector<Eigen::Vector3d> &plvec_voxel = *plvec_voxels[a];
       // Position in slidingwindow for each point in "plvec_voxel"
       vector<int> &slwd_num = *slwd_nums[a]; 
-      uint backnum = plvec_voxel.size();
+      uint backnum = plvec_voxel.size();// 当前voxel中点云数量
 
       Eigen::Vector3d vec_tran;
       vector<Eigen::Vector3d> plvec_back(backnum);
@@ -373,11 +391,11 @@ public:
       Eigen::Vector3d centor(Eigen::Vector3d::Zero());
       Eigen::Matrix3d covMat(Eigen::Matrix3d::Zero());
 
-      for(uint i=0; i<backnum; i++)
+      for(uint i=0; i<backnum; i++)// 计算均值和协方差
       {
         vec_tran = so3_ps[slwd_num[i]].matrix() * plvec_voxel[i];
         // left multiplication instead of right muliplication in paper
-        point_xis[i] = -SO3::hat(vec_tran); 
+        point_xis[i] = -SO3::hat(vec_tran); // part of eq.(10) -(Rp)^ 向量=>反对称矩阵 
         plvec_back[i] = vec_tran + t_ps[slwd_num[i]]; // after trans
 
         centor += plvec_back[i];
@@ -408,9 +426,9 @@ public:
       for(uint i=0; i<backnum; i++)
       {
         plvec_back[i] = plvec_back[i] - centor;
-        vec_Jt = 2.0/N_points * ukukT * plvec_back[i];
-        _jact.block<3, 1>(6*slwd_num[i]+3, 0) += vec_Jt;
-        _jact.block<3, 1>(6*slwd_num[i], 0) -= point_xis[i] * vec_Jt;
+        vec_Jt = 2.0/N_points * ukukT * plvec_back[i];// eq.(6)
+        _jact.block<3, 1>(6*slwd_num[i]+3, 0) += vec_Jt;// JD=JI=J
+        _jact.block<3, 1>(6*slwd_num[i], 0) -= point_xis[i] * vec_Jt;// part of eq.(13) JD
       }
 
       // Hessian matrix
@@ -426,7 +444,7 @@ public:
         }
         Hessian33 = u[i]*u[k].transpose();
         // part of F matrix in paper
-        C_k_np[i] = -1.0/N_points/(eigen_value[i]-eigen_value[k])*(Hessian33 + Hessian33.transpose());
+        C_k_np[i] = -1.0/N_points/(eigen_value[i]-eigen_value[k])*(Hessian33 + Hessian33.transpose());// eq.(7) F_Pj_m_n
       }
 
       Eigen::Matrix3d h33;
@@ -453,6 +471,7 @@ public:
           {
             Hessian33 -= 1.0/N_points * ukukT;
           }
+          // eq.(7) 
           Hessian33 = 2.0/N_points * Hessian33; // Hessian matrix of lambda and point
 
           // Hessian matrix of lambda and pose
@@ -480,7 +499,7 @@ public:
         }
       }
 
-      if(k == 1)
+      if(k == 1)// 0 is surf, 1 is line
       {
         // add weight for line feature
         residual += corn_less*eigen_value[k];
@@ -606,6 +625,7 @@ public:
       exit(0);
     }
 
+    // 控制优化更新量
     double u = 0.01, v = 2;
     Eigen::MatrixXd D(jac_leng, jac_leng), Hess(jac_leng, jac_leng);
     Eigen::VectorXd JacT(jac_leng), dxi(jac_leng);
@@ -621,7 +641,7 @@ public:
     cv::Mat matB(jac_leng, 1, CV_64F, cv::Scalar::all(0));
     cv::Mat matX(jac_leng, 1, CV_64F, cv::Scalar::all(0));
 
-    for(int i=0; i<iter_max; i++)
+    for(int i=0; i<iter_max; i++)// 迭代计算 最大迭代次数为20
     {
       if(is_calc_hess)
       {
@@ -634,29 +654,31 @@ public:
       
       for(int j=0; j<jac_leng; j++)
       {
-        matB.at<double>(j, 0) = -JacT(j, 0);
+        matB.at<double>(j, 0) = -JacT(j, 0);// B=-J(T)^T
         for(int f=0; f<jac_leng; f++)
         {
-          matA.at<double>(j, f) = Hess2(j, f);
+          matA.at<double>(j, f) = Hess2(j, f);// A=(H(T)+uI)
         }
       }
-      cv::solve(matA, matB, matX, cv::DECOMP_QR);
+      cv::solve(matA, matB, matX, cv::DECOMP_QR);// eq.(14)
       for(int j=0; j<jac_leng; j++)
       {
-        dxi(j, 0) = matX.at<double>(j, 0);
+        dxi(j, 0) = matX.at<double>(j, 0);// 增量
       }
-  
+
 
       for(int j=0; j<slwd_size; j++)
       {
         // left multiplication
-        so3_poses_temp[j] = SO3::exp(dxi.block<3, 1>(6*(j), 0)) * so3_poses[j];
+        so3_poses_temp[j] = SO3::exp(dxi.block<3, 1>(6*(j), 0)) * so3_poses[j];// SO3 * SO3
         t_poses_temp[j] = t_poses[j] + dxi.block<3, 1>(6*(j)+3, 0);
       }
 
       // LM
       double q1 = 0.5*(dxi.transpose() * (u*D*dxi-JacT))[0];
       // double q1 = 0.5*dxi.dot(u*D*dxi-JacT);
+
+      // 计算加了扰动后的 residual
       evaluate_only_residual(so3_poses_temp, t_poses_temp, residual2);
 
       q = (residual1-residual2);
@@ -722,26 +744,28 @@ public:
   } 
 
 };
+// end of Class LM_SLWD_VOXEL
 
 
 class OCTO_TREE
 {
 public:
   static int voxel_windowsize;
-  vector<PL_VEC*> plvec_orig;
-  vector<PL_VEC*> plvec_tran;
+  vector<PL_VEC*> plvec_orig;// 多帧的 origin points vector
+  vector<PL_VEC*> plvec_tran;// 多帧的 translated points vector
   int octo_state; // 0 is end of tree, 1 is not
   PL_VEC sig_vec_points;
-  SIG_VEC_CLASS sig_vec;
+  SIG_VEC_CLASS sig_vec;// P_fixed
   int ftype;
-  int points_size, sw_points_size;
+  int points_size, sw_points_size;// 总的点数 ， 窗口数
   double feat_eigen_ratio, feat_eigen_ratio_test;
-  PointType ap_centor_direct;
+  PointType ap_centor_direct;// 近似中心
   double voxel_center[3]; // x, y, z
   double quater_length;
-  OCTO_TREE* leaves[8];
-  bool is2opt;
-  int capacity;
+  OCTO_TREE* leaves[8];// 子节点
+  bool is2opt;// true false Voxel has points or not
+  int capacity;// 保存的点云帧数（来自不同帧的点云）
+  // 这棵八叉树的所有小体素的近似中心和方向/法向量
   pcl::PointCloud<PointType> root_centors;
 
   OCTO_TREE(int ft, int capa): ftype(ft), capacity(capa)
@@ -761,6 +785,7 @@ public:
   }
 
   // Used by "recut"
+  // 计算近似中点和方向/法向量
   void calc_eigen()
   {
     Eigen::Matrix3d covMat(Eigen::Matrix3d::Zero());
@@ -797,6 +822,7 @@ public:
 
   // Cut root voxel into small pieces
   // frame_head: Position of newest scan in sliding window
+  // 将根节点新存放的数据，放入这棵八叉树的叶节点，并计算近似中心和方向/法向量 ap_centor_direct 保存至 pl_feat_map
   void recut(int layer, uint frame_head, pcl::PointCloud<PointType> &pl_feat_map)
   {
     if(octo_state == 0)
@@ -893,10 +919,12 @@ public:
   }
 
   // marginalize 5 scans in slidingwindow (assume margi_size is 5)
+  // 遍历octree 将近似中心放入pl_feat_map
   void marginalize(int layer, int margi_size, vector<Eigen::Quaterniond> &q_poses, vector<Eigen::Vector3d> &t_poses, int window_base, pcl::PointCloud<PointType> &pl_feat_map)
   {
-    if(octo_state!=1 || layer==0)
+    if(octo_state!=1 || layer==0)// 叶节点 或 第一层
     {
+      // 叶节点 
       if(octo_state != 1)
       {
         for(int i=0; i<OCTO_TREE::voxel_windowsize; i++)
@@ -914,7 +942,7 @@ public:
         {
           sig_vec_points.insert(sig_vec_points.end(), plvec_tran[i]->begin(), plvec_tran[i]->end());
         }
-        down_sampling_voxel(sig_vec_points, quater_length);
+        down_sampling_voxel(sig_vec_points, quater_length);// 
         
         a_size = sig_vec_points.size();
         sig_vec.tozero();
@@ -922,7 +950,7 @@ public:
         for(uint i=0; i<a_size; i++)
         {
           sig_vec.sigma_vTv += sig_vec_points[i] * sig_vec_points[i].transpose();
-          sig_vec.sigma_vi  += sig_vec_points[i];
+          sig_vec.sigma_vi  += sig_vec_points[i];// 将0-margi帧plvec_tran点云fixed -> sig_vec
         }
       }
 
@@ -934,6 +962,7 @@ public:
         // plvec_orig[i].clear(); plvec_orig[i].shrink_to_fit();
       }
 
+      // 第一层
       if(layer == 0)
       {
         a_size = 0;
@@ -943,17 +972,21 @@ public:
         }
         if(a_size == 0)
         {
-          // Voxel has no points in slidingwindow
+          // Voxel has no points in slidingwindow 空节点 
           is2opt = false;
         }
       }
       
+      // 窗口平移 
+      // (0,voxel_windowsize-margi)     
+      // (voxel_windowsize-margi,voxel_windowsize)        
       for(int i=margi_size; i<OCTO_TREE::voxel_windowsize; i++)
       {
         plvec_orig[i]->swap(*plvec_orig[i-margi_size]);
         plvec_tran[i]->swap(*plvec_tran[i-margi_size]);
       }
       
+      // 叶节点
       if(octo_state != 1)
       {
         points_size = 0;
@@ -962,13 +995,13 @@ public:
           points_size += plvec_orig[i]->size();
         }
         points_size += sig_vec.sigma_size;
-        if(points_size < MIN_PS)
+        if(points_size < MIN_PS)// 最少7个点构成一个特征 ？？？
         {
           feat_eigen_ratio = -1;
-          return;
+          return; 
         }
 
-        calc_eigen();
+        calc_eigen();// 计算近似中心ap 
 
         if(isnan(feat_eigen_ratio))
         {
@@ -1022,9 +1055,9 @@ public:
   }
 
   // Push voxel into "opt_lsv" (LM optimizer)
-  void traversal_opt(LM_SLWD_VOXEL &opt_lsv)
+  void traversal_opt(LM_SLWD_VOXEL &opt_lsv) //  recurse 
   {
-    if(octo_state != 1)
+    if(octo_state != 1)// 叶节点
     {
       sw_points_size = 0;
       for(int i=0; i<OCTO_TREE::voxel_windowsize; i++)
@@ -1035,7 +1068,7 @@ public:
       {
         return;
       }
-      traversal_opt_calc_eigen();
+      traversal_opt_calc_eigen();// 计算当前叶节点中的特征点的 feat_eigen_ratio_test
 
       if(isnan(feat_eigen_ratio_test))
       {
@@ -1044,7 +1077,7 @@ public:
 
       if(feat_eigen_ratio_test > opt_feat_eigen_limit[ftype])
       {
-        opt_lsv.push_voxel(plvec_orig, sig_vec, ftype);
+        opt_lsv.push_voxel(plvec_orig, sig_vec, ftype);// plvec_orig为叶节点中多帧的点云，即这个体素位置在多个时刻的观测;sig_vec P_fixed
       }
 
     }
@@ -1062,7 +1095,7 @@ public:
 
 };
 
-int OCTO_TREE::voxel_windowsize = 0;
+int OCTO_TREE::voxel_windowsize = 0;// The number of scans in the sliding window
 
 // Like "LM_SLWD_VOXEL"
 // Scam2map optimizer
@@ -1196,7 +1229,7 @@ public:
       for(int j=0; j<6; j++)
       {
         dxi(j, 0) = matX.at<double>(j, 0);
-      }
+      }   
 
       so3_temp = SO3::exp(dxi.block<3, 1>(0, 0)) * so3_pose;
       t_temp = t_pose + dxi.block<3, 1>(3, 0);
