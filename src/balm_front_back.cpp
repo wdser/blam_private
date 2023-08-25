@@ -179,7 +179,7 @@ int main(int argc, char **argv)
   while(n.ok())
   {
     ros::spinOnce();
-/*********************************Get refine result******************************************************************/
+/*********************************process step5: Get refine result******************************************************************/
     // The thread of map_refine is done 
     // map_refine_flag 0 not refined; 2 refined 
     // 将refine后的结果发布，并且边缘化 margi_size 帧（固定这些帧的位姿），设置 map_refine_flag 为0 
@@ -269,7 +269,7 @@ int main(int argc, char **argv)
     } 
     // end map_refine 
     
-/*********************************Get new raw&feature pointclouds******************************************************************/    
+/*********************************process step1: Get new raw&feature pointclouds******************************************************************/    
     // check time simultaneous  
     if(surf_buf.empty() || corn_buf.empty() || full_buf.empty())
     {
@@ -315,7 +315,7 @@ int main(int argc, char **argv)
     // The number of scans in the sliding window  接受到所有点云的帧数-当前windows中的第一帧 => 当前sliding windows中的点云帧数
     OCTO_TREE::voxel_windowsize = plcount - window_base;
     
-/*********************************Scan2map module******************************************************************/
+/*********************************process step2: Scan2map module******************************************************************/
     // 划分体素，每个体素仅用一个点来表示，这个点是该体素内点云的坐标均值
     // Down sampling like PCL voxelgrid filter
     down_sampling_voxel(*pl_corn, corn_filter_length);
@@ -629,7 +629,7 @@ int main(int argc, char **argv)
       exit(0);
     }
 
-/*********************************Update vovel map******************************************************************/
+/*********************************process step3: Update vovel map******************************************************************/
     // Put current feature points into root voxel node 
     // 将当前帧的特征点云加入 voxel map 的 root voxel node ： surf_map corn_map
     // hashtable of voxel map  unordered_map<VOXEL_LOC, OCTO_TREE*>
@@ -669,7 +669,7 @@ int main(int argc, char **argv)
       pl_corn_centor_map += iter->second->root_centors;
     }
     
-/*********************************Refine module******************************************************************/    
+/*********************************process step4: Refine module******************************************************************/    
     // Begin map refine module
     if(plcount>=window_base+window_size && opt_lsv.read_refine_state()==0)
     {
